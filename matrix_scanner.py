@@ -13,14 +13,15 @@ TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 ACCOUNT_SIZE = 100000  
 RISK_PER_TRADE = 0.01  
 
+# Renamed to friendly names since we no longer rely on Yahoo's broken index tickers
 sectors = {
-    "^CNXAUTO": ["TATAMOTORS.NS", "MARUTI.NS", "M&M.NS", "BAJAJ-AUTO.NS", "EICHERMOT.NS", "TVSMOTOR.NS", "HEROMOTOCO.NS", "ASHOKLEY.NS"],
-    "^CNXIT": ["TCS.NS", "INFY.NS", "HCLTECH.NS", "WIPRO.NS", "TECHM.NS", "LTIM.NS", "PERSISTENT.NS", "COFORGE.NS"],
-    "^CNXREALTY": ["DLF.NS", "GODREJPROP.NS", "OBEROIRLTY.NS", "PRESTIGE.NS", "PHOENIXLTD.NS", "LODHA.NS"],
-    "^CNXMETAL": ["TATASTEEL.NS", "JSWSTEEL.NS", "HINDALCO.NS", "VEDL.NS", "JINDALSTEL.NS", "COALINDIA.NS"],
-    "^CNXPHARMA": ["SUNPHARMA.NS", "CIPLA.NS", "DRREDDY.NS", "DIVISLAB.NS", "LUPIN.NS", "AUROPHARMA.NS", "TORNTPHARM.NS"],
-    "^CNXPSUBANK": ["SBIN.NS", "BOB.NS", "PNB.NS", "CANBK.NS", "UNIONBANK.NS", "INDIANB.NS"],
-    "^CNXENERGY": ["RELIANCE.NS", "ONGC.NS", "NTPC.NS", "POWERGRID.NS", "TATAPOWER.NS", "IOC.NS"]
+    "AUTO": ["TATAMOTORS.NS", "MARUTI.NS", "M&M.NS", "BAJAJ-AUTO.NS", "EICHERMOT.NS", "TVSMOTOR.NS", "HEROMOTOCO.NS", "ASHOKLEY.NS"],
+    "IT": ["TCS.NS", "INFY.NS", "HCLTECH.NS", "WIPRO.NS", "TECHM.NS", "LTIM.NS", "PERSISTENT.NS", "COFORGE.NS"],
+    "REALTY": ["DLF.NS", "GODREJPROP.NS", "OBEROIRLTY.NS", "PRESTIGE.NS", "PHOENIXLTD.NS", "LODHA.NS"],
+    "METAL": ["TATASTEEL.NS", "JSWSTEEL.NS", "HINDALCO.NS", "VEDL.NS", "JINDALSTEL.NS", "COALINDIA.NS"],
+    "PHARMA": ["SUNPHARMA.NS", "CIPLA.NS", "DRREDDY.NS", "DIVISLAB.NS", "LUPIN.NS", "AUROPHARMA.NS", "TORNTPHARM.NS"],
+    "PSU BANK": ["SBIN.NS", "BOB.NS", "PNB.NS", "CANBK.NS", "UNIONBANK.NS", "INDIANB.NS"],
+    "ENERGY": ["RELIANCE.NS", "ONGC.NS", "NTPC.NS", "POWERGRID.NS", "TATAPOWER.NS", "IOC.NS"]
 }
 
 def send_telegram(message):
@@ -43,31 +44,50 @@ def get_val(df, col, idx=-1):
     val = df[col].iloc[idx]
     return float(val.iloc[0]) if isinstance(val, pd.Series) else float(val)
 
+# ==========================================
+# STEP A: SYNTHETIC SECTOR SCORING
+# ==========================================
+# Since Yahoo Finance blocks Indian Index tickers, we calculate the sector momentum
+# by averaging the momentum of the top stocks inside that sector.
 sector_scores = {}
-for sec_ticker in sectors.keys():
-    try:
-        data = yf.download(sec_ticker, period="6mo", progress=False)
-        if len(data) < 65: continue
-        if isinstance(data.columns, pd.MultiIndex): data.columns = [c[0] for c in data.columns]
-        c = data['Close']
-        score = (((c.iloc[-1] - c.iloc[-20]) / c.iloc[-20]) * 0.5) + (((c.iloc[-1] - c.iloc[-60]) / c.iloc[-60]) * 0.3) + (((c.iloc[-1] - c.iloc[-5]) / c.iloc[-5]) * 0.2)
-        sector_scores[sec_ticker] = score * 100
-    except: continue
+stock_cache = {}
+
+for sec_name, stocks in sectors.items():
+    sec_stock_scores = []
+    for stock in stocks:
+        try:
+            df = yf.download(stock, period="1y", progress=False)
+            if len(df) < 200: continue
+            if isinstance(df.columns, pd.MultiIndex): df.columns = [c[0] for c in df.columns]
+            
+            stock_cache[stock] = df
+            c = df['Close']
+            
+            # Stock momentum: 50% Swing (20d), 30% Macro (60d), 20% Micro (5d)
+            score = (((c.iloc[-1] - c.iloc[-20]) / c.iloc[-20]) * 0.5) + \
+                    (((c.iloc[-1] - c.iloc[-60]) / c.iloc[-60]) * 0.3) + \
+                    (((c.iloc[-1] - c.iloc[-5]) / c.iloc[-5]) * 0.2)
+            sec_stock_scores.append(score)
+        except: continue
+        
+    if sec_stock_scores:
+        sector_scores[sec_name] = np.mean(sec_stock_scores) * 100
 
 if not sector_scores:
-    send_telegram("⚠️ Matrix Engine Error: Could not fetch sector data today.")
+    send_telegram("⚠️ Matrix Engine Error: Could not fetch stock data today.")
     exit()
 
-best_sec = max(sector_scores, key=sector_scores.get)
-best_sec_name = best_sec.replace('^CNX', '')
+best_sec_name = max(sector_scores, key=sector_scores.get)
 
+# ==========================================
+# STEP B: SCAN THE APEX SECTOR
+# ==========================================
 triggered = []
-for stock in sectors[best_sec]:
+for stock in sectors[best_sec_name]:
+    if stock not in stock_cache: continue
+    df = stock_cache[stock]
+    
     try:
-        df = yf.download(stock, period="1y", progress=False)
-        if len(df) < 200: continue
-        if isinstance(df.columns, pd.MultiIndex): df.columns = [c[0] for c in df.columns]
-        
         df['SMA_50'] = df['Close'].rolling(50).mean()
         df['SMA_200'] = df['Close'].rolling(200).mean()
         df['EMA_21'] = df['Close'].ewm(span=21, adjust=False).mean()
@@ -86,6 +106,9 @@ for stock in sectors[best_sec]:
             triggered.append({"ticker": stock.replace('.NS', ''), "entry": c, "stop": stop_loss, "shares": shares})
     except: continue
 
+# ==========================================
+# STEP C: FIRE ALERTS
+# ==========================================
 date_today = datetime.datetime.now().strftime("%Y-%m-%d")
 if triggered:
     msg = f"🟩 *ROBUST MATRIX ALGORITHM* ({date_today})\n\n👑 *Dominant Sector:* {best_sec_name}\n〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️\n"

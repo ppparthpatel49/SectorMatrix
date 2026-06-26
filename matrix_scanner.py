@@ -100,7 +100,7 @@ for stock in sectors[best_sec]:
         
         c, l, o, v, atr = get_val(df, 'Close'), get_val(df, 'Low'), get_val(df, 'Open'), get_val(df, 'Volume'), get_val(df, 'ATR')
 
-        if (get_val(df, 'Turnover') > 500000000 and c > get_val(df, 'SMA_50') > get_val(df, 'SMA_200') and 
+        if (get_val(df, 'Turnover') > 5000000 and c > get_val(df, 'SMA_50') > get_val(df, 'SMA_200') and 
             get_val(df, 'RSI') > 60 and l <= get_val(df, 'EMA_21') and c > o and v < get_val(df, 'Vol_SMA')):
             
             stop_loss = l - (atr * 0.5)

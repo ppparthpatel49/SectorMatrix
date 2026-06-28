@@ -202,7 +202,7 @@ if pullback_triggers and not kill_switch_active:
 # ==========================================
 # STEP C: FIRE ALERTS
 # ==========================================
-msg = f"👑 *APEX SECTOR MATRIX* ({date_today})\n"
+msg = f" *SECTOR MATRIX* ({date_today})\n"
 msg += f"{macro_status}\n〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️\n\n"
 
 if rotation_warnings:

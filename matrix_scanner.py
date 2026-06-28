@@ -122,6 +122,7 @@ for p_stock in portfolio:
 # ==========================================
 # STEP B: SCAN THE APEX SECTOR 
 # ==========================================
+all_sector_stocks = []
 strong_stocks = []
 pullback_triggers = []
 
@@ -142,13 +143,17 @@ for stock in sectors[best_sec]:
         df['RSI'] = 100 - (100 / (1 + (gain / loss)))
         
         c, l, o, v = get_val(df, 'Close'), get_val(df, 'Low'), get_val(df, 'Open'), get_val(df, 'Volume')
+        rsi_val = get_val(df, 'RSI')
+        
+        # Track every stock in the sector to find the absolute top 3 leaders
+        all_sector_stocks.append({"ticker": stock.replace('.NS', ''), "rsi": rsi_val})
         
         is_liquid = (c * v) > 100000000
         is_uptrend = c > get_val(df, 'SMA_50') and get_val(df, 'SMA_50') > get_val(df, 'SMA_200')
         
-        if is_liquid and is_uptrend and get_val(df, 'RSI') > 60:
+        if is_liquid and is_uptrend and rsi_val > 60:
             if check_fundamentals(stock):
-                strong_stocks.append({"ticker": stock.replace('.NS', ''), "price": c, "rsi": get_val(df, 'RSI')})
+                strong_stocks.append({"ticker": stock.replace('.NS', ''), "price": c, "rsi": rsi_val})
                 
                 if l <= get_val(df, 'EMA_21') and c > o and v < get_val(df, 'Vol_SMA'):
                     ranges = pd.concat([df['High']-df['Low'], np.abs(df['High']-df['Close'].shift()), np.abs(df['Low']-df['Close'].shift())], axis=1)
@@ -160,7 +165,11 @@ for stock in sectors[best_sec]:
     except: continue
     time.sleep(0.1)
 
+# Sort everything by highest RSI (Momentum)
+all_sector_stocks = sorted(all_sector_stocks, key=lambda k: k['rsi'], reverse=True)
 strong_stocks = sorted(strong_stocks, key=lambda k: k['rsi'], reverse=True)
+
+top_3_leaders = all_sector_stocks[:3]
 
 # ==========================================
 # UPGRADE 3: AUTOMATED CSV JOURNALING
@@ -185,7 +194,11 @@ if rotation_warnings:
     for w in rotation_warnings: msg += f"{w}\n"
     msg += f"\n〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️\n\n"
 
-msg += f"🏆 *#1 Sector:* {best_sec_friendly}\n\n"
+msg += f"🏆 *#1 Sector:* {best_sec_friendly}\n"
+# New addition: Display the Top 3 unconditional momentum leaders in the winning sector
+if top_3_leaders:
+    leaders_str = ", ".join([f"{s['ticker']} ({s['rsi']:.0f})" for s in top_3_leaders])
+    msg += f"🥇 *Top 3 Leaders:* {leaders_str}\n\n"
 
 if pullback_triggers:
     if kill_switch_active:
@@ -199,11 +212,16 @@ if pullback_triggers:
 else:
     msg += f"🎯 *FUNDAMENTAL 21-EMA PULLBACKS:*\n⚠️ None triggered today. Wait for a dip.\n\n"
 
+# Only print the Strong Radar if they aren't already listed in the Pullbacks
 if strong_stocks:
-    msg += f"💪 *STRONG FUNDAMENTAL RADAR (RSI>60)*\n"
+    printed_any = False
+    temp_msg = f"💪 *STRONG FUNDAMENTAL RADAR (RSI>60)*\n"
     for s in strong_stocks[:5]:
         if not any(t['ticker'] == s['ticker'] for t in pullback_triggers):
-            msg += f"• {s['ticker']} (RSI: {s['rsi']:.0f})\n"
+            temp_msg += f"• {s['ticker']} (RSI: {s['rsi']:.0f})\n"
+            printed_any = True
+    if printed_any:
+        msg += temp_msg
 
 send_telegram(msg)
 print("Finished! Matrix execution complete.")

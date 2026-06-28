@@ -27,9 +27,14 @@ def load_portfolio(filename="portfolio.csv"):
         return df[0].dropna().astype(str).str.strip().tolist()
     except: return []
 
+# Move to the script's directory so it finds sectors.json correctly when run by GitHub Actions
+os.chdir(os.path.dirname(os.path.abspath(__file__)))
+
 sectors = load_sectors()
 portfolio = load_portfolio()
-if not sectors: exit()
+if not sectors:
+    print("sectors.json not found!")
+    exit()
 
 def get_sector_for_ticker(ticker):
     for sec, stocks in sectors.items():
@@ -126,6 +131,20 @@ all_sector_stocks = []
 strong_stocks = []
 pullback_triggers = []
 
+def calc_atr(df, period=14):
+    ranges = pd.concat([df['High'] - df['Low'], np.abs(df['High'] - df['Close'].shift()), np.abs(df['Low'] - df['Close'].shift())], axis=1)
+    return ranges.max(axis=1).rolling(period).mean()
+
+def calc_rsi(series, period=14):
+    delta = series.diff()
+    gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
+    loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
+    return 100 - (100 / (1 + (gain / loss)))
+
+def get_val(df, col, idx=-1):
+    val = df[col].iloc[idx]
+    return float(val.iloc[0]) if isinstance(val, pd.Series) else float(val)
+
 print(f"Scanning stocks in {best_sec_friendly}...")
 for stock in sectors[best_sec]:
     try:
@@ -137,35 +156,32 @@ for stock in sectors[best_sec]:
         df['SMA_200'] = df['Close'].rolling(200).mean()
         df['EMA_21'] = df['Close'].ewm(span=21, adjust=False).mean()
         df['Vol_SMA'] = df['Volume'].rolling(20).mean()
-        delta = df['Close'].diff()
-        gain = (delta.where(delta > 0, 0)).rolling(14).mean()
-        loss = (-delta.where(delta < 0, 0)).rolling(14).mean()
-        df['RSI'] = 100 - (100 / (1 + (gain / loss)))
+        df['RSI'] = calc_rsi(df['Close'])
+        df['ATR'] = calc_atr(df)
         
         c, l, o, v = get_val(df, 'Close'), get_val(df, 'Low'), get_val(df, 'Open'), get_val(df, 'Volume')
         rsi_val = get_val(df, 'RSI')
+        atr = get_val(df, 'ATR')
         
-        # Track every stock in the sector to find the absolute top 3 leaders
-        all_sector_stocks.append({"ticker": stock.replace('.NS', ''), "rsi": rsi_val})
+        if pd.isna(rsi_val):
+            rsi_val = 0.0
+
+        all_sector_stocks.append({"ticker": stock.replace('.NS', ''), "rsi": float(rsi_val)})
         
         is_liquid = (c * v) > 100000000
         is_uptrend = c > get_val(df, 'SMA_50') and get_val(df, 'SMA_50') > get_val(df, 'SMA_200')
         
         if is_liquid and is_uptrend and rsi_val > 60:
             if check_fundamentals(stock):
-                strong_stocks.append({"ticker": stock.replace('.NS', ''), "price": c, "rsi": rsi_val})
+                strong_stocks.append({"ticker": stock.replace('.NS', ''), "price": c, "rsi": float(rsi_val)})
                 
                 if l <= get_val(df, 'EMA_21') and c > o and v < get_val(df, 'Vol_SMA'):
-                    ranges = pd.concat([df['High']-df['Low'], np.abs(df['High']-df['Close'].shift()), np.abs(df['Low']-df['Close'].shift())], axis=1)
-                    atr = ranges.max(axis=1).rolling(14).mean().iloc[-1]
-                    
                     stop_loss = l - (atr * 0.5)
                     shares = int((ACCOUNT_SIZE * RISK_PER_TRADE) / (c - stop_loss)) if (c - stop_loss) > 0 else 0
                     pullback_triggers.append({"ticker": stock.replace('.NS', ''), "entry": c, "stop": stop_loss, "shares": shares})
-    except: continue
-    time.sleep(0.1)
+    except Exception as e:
+        continue
 
-# Sort everything by highest RSI (Momentum)
 all_sector_stocks = sorted(all_sector_stocks, key=lambda k: k['rsi'], reverse=True)
 strong_stocks = sorted(strong_stocks, key=lambda k: k['rsi'], reverse=True)
 
@@ -195,14 +211,13 @@ if rotation_warnings:
     msg += f"\n〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️\n\n"
 
 msg += f"🏆 *#1 Sector:* {best_sec_friendly}\n"
-# New addition: Display the Top 3 unconditional momentum leaders in the winning sector
 if top_3_leaders:
     leaders_str = ", ".join([f"{s['ticker']} ({s['rsi']:.0f})" for s in top_3_leaders])
     msg += f"🥇 *Top 3 Leaders:* {leaders_str}\n\n"
 
 if pullback_triggers:
     if kill_switch_active:
-        msg += f"🎯 *FUNDAMENTAL 21-EMA PULLBACKS (PAPER TRADE / HIGH RISK)*\n"
+        msg += f"🎯 *FUNDAMENTAL 21-EMA PULLBACKS (PAPER TRADE)*\n"
         msg += f"_Macro environment is red. Deploying capital is dangerous._\n"
     else:
         msg += f"🎯 *FUNDAMENTAL 21-EMA PULLBACKS (BUY)*\n"
@@ -212,7 +227,6 @@ if pullback_triggers:
 else:
     msg += f"🎯 *FUNDAMENTAL 21-EMA PULLBACKS:*\n⚠️ None triggered today. Wait for a dip.\n\n"
 
-# Only print the Strong Radar if they aren't already listed in the Pullbacks
 if strong_stocks:
     printed_any = False
     temp_msg = f"💪 *STRONG FUNDAMENTAL RADAR (RSI>60)*\n"

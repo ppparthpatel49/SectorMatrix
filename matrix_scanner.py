@@ -1,5 +1,6 @@
 import os
 import time
+import json
 import yfinance as yf
 from tvDatafeed import TvDatafeed, Interval
 import pandas as pd
@@ -15,34 +16,17 @@ TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID")
 ACCOUNT_SIZE = 100000  
 RISK_PER_TRADE = 0.01  
 
-# Map exact TradingView Index symbols to their Yahoo Finance constituent stocks
-sectors = {
-   
-    "NIFTY": ["HDFCBANK.NS", "RELIANCE.NS", "ICICIBANK.NS", "INFY.NS", "ITC.NS", "TCS.NS", "LT.NS", "AXISBANK.NS", "KOTAKBANK.NS", "BHARTIARTL.NS"],
-    "NIFTY_NEXT_50": ["TRENT.NS", "BEL.NS", "HAL.NS", "TATAPOWER.NS", "ZOMATO.NS", "IRFC.NS", "PFC.NS", "RECLTD.NS", "DLF.NS", "SIEMENS.NS"],
-    "CNX100": ["HDFCBANK.NS", "RELIANCE.NS", "ICICIBANK.NS", "INFY.NS", "ITC.NS", "TCS.NS", "TRENT.NS", "BEL.NS", "HAL.NS", "ZOMATO.NS"],
-    "CNX200": ["HDFCBANK.NS", "RELIANCE.NS", "INFY.NS", "TCS.NS", "MAXHEALTH.NS", "SUPREMEIND.NS", "LUPIN.NS", "POLYCAB.NS", "AUROPHARMA.NS", "COFORGE.NS"],
-    "CNX500": ["HDFCBANK.NS", "RELIANCE.NS", "INFY.NS", "BSE.NS", "HUDCO.NS", "COCHINSHIP.NS", "IRFC.NS", "SUZLON.NS", "MOTILALOFS.NS", " KalyanKJIL.NS"],
-    "NIFTY_MIDCAP_50": ["MAXHEALTH.NS", "SUPREMEIND.NS", "POLYCAB.NS", "CUMMINSIND.NS", "PERSISTENT.NS", "OBEROIRLTY.NS", "ASHOKLEY.NS", "BALKRISIND.NS", "CONCOR.NS", "MRF.NS"],
-    "NIFTY_MIDCAP_100": ["MAXHEALTH.NS", "SUPREMEIND.NS", "POLYCAB.NS", "PERSISTENT.NS", "COFORGE.NS", "FEDERALBNK.NS", "INDIANB.NS", "VOLTAS.NS", "TATACOMM.NS", "AUBANK.NS"],
-    "NIFTY_MIDCAP_150": ["MAXHEALTH.NS", "SUPREMEIND.NS", "POLYCAB.NS", "COFORGE.NS", "CHOLAFIN.NS", "YESBANK.NS", "SJVN.NS", "COLPAL.NS", "DALBHARAT.NS", "AIAENG.NS"],
-    "CNXSMALLCAP": ["SUZLON.NS", "BSE.NS", "HUDCO.NS", "COCHINSHIP.NS", "MOTILALOFS.NS", "IRB.NS", "NBCC.NS", "CDSL.NS", "RITES.NS", "IFCI.NS"],
-    "NIFTY_SMLCAP_250": ["SUZLON.NS", "BSE.NS", "HUDCO.NS", "COCHINSHIP.NS", "MOTILALOFS.NS", "CDSL.NS", "ANGELONE.NS", "CYIENT.NS", "CENTURYTEX.NS", "KEI.NS"],
-    "NIFTY_MICROCAP_250": ["REPL.NS", "IFGLEXPOR.NS", "RAMASTEEL.NS", "JWL.NS", "MONARCH.NS", "SANSERA.NS", "EMUDHRA.NS", "SHYAMMETL.NS", "TEXRAIL.NS", "GREENPANEL.NS"],
-    "INDIAVIX": ["HDFCBANK.NS", "RELIANCE.NS", "ICICIBANK.NS", "INFY.NS", "ITC.NS", "TCS.NS", "LT.NS", "AXISBANK.NS", "SBIN.NS", "BHARTIARTL.NS"],
-    "BANKNIFTY": ["HDFCBANK.NS", "ICICIBANK.NS", "AXISBANK.NS", "KOTAKBANK.NS", "SBIN.NS", "INDUSINDBK.NS", "BANKBARODA.NS", "FEDERALBNK.NS", "PNB.NS", "IDFCFIRSTB.NS"],
-    "CNXIT": ["TCS.NS", "INFY.NS", "HCLTECH.NS", "WIPRO.NS", "TECHM.NS", "PERSISTENT.NS", "COFORGE.NS", "LTIM.NS", "MPHASIS.NS", "KPITTECH.NS"],
-    "CNXPHARMA": ["SUNPHARMA.NS", "CIPLA.NS", "REDDY.NS", "DIVISLAB.NS", "LUPIN.NS", "AUROPHARMA.NS", "TORNTPHARM.NS", "APOLLOHOSP.NS", "ZYDUSLIFE.NS", "ALKEM.NS"],
-    "CNXFMCG": ["ITC.NS", "HINDUNILVR.NS", "NESTLEIND.NS", "BRITANNIA.NS", "TATACONSUM.NS", "GODREJCP.NS", "DABUR.NS", "MARICO.NS", "COLPAL.NS", "VBL.NS"],
-    "CNXMETAL": ["TATASTEEL.NS", "JSWSTEEL.NS", "HINDALCO.NS", "VEDL.NS", "JINDALSTEL.NS", "COALINDIA.NS", "NATIONALUM.NS", "SAIL.NS", "NMDC.NS", "APLAPOLLO.NS"],
-    "CNXAUTO": ["TATAMOTORS.NS", "MARUTI.NS", "M&M.NS", "BAJAJ-AUTO.NS", "EICHERMOT.NS", "TVSMOTOR.NS", "HEROMOTOCO.NS", "ASHOKLEY.NS", "TIINDIA.NS", "BHARATFORG.NS"],
-    "NIFTY_FIN_SERVICE": ["HDFCBANK.NS", "ICICIBANK.NS", "AXISBANK.NS", "KOTAKBANK.NS", "BAJFINANCE.NS", "BAJAJFINSV.NS", "SBIN.NS", "SHRIRAMFIN.NS", "PFC.NS", "RECLTD.NS"],
-    "CNXENERGY": ["RELIANCE.NS", "ONGC.NS", "NTPC.NS", "POWERGRID.NS", "TATAPOWER.NS", "IOC.NS", "BPCL.NS", "ADANIGREEN.NS", "ADANIENSOL.NS", "GAIL.NS"],
-    "CNXINFRA": ["LT.NS", "RELIANCE.NS", "BHARTIARTL.NS", "NTPC.NS", "ULTRACEMCO.NS", "POWERGRID.NS", "ADANIPORTS.NS", "GRASIM.NS", "ONGC.NS", "INDIGO.NS"],
-    "CNXREALTY": ["DLF.NS", "GODREJPROP.NS", "OBEROIRLTY.NS", "PRESTIGE.NS", "PHOENIXLTD.NS", "LODHA.NS", "BRIGADE.NS", "SOBHA.NS", "SUNTECK.NS", "MAHLIFE.NS"],
-    "CNXCOMMODITIES": ["RELIANCE.NS", "NTPC.NS", "ULTRACEMCO.NS", "TATASTEEL.NS", "JSWSTEEL.NS", "HINDALCO.NS", "COALINDIA.NS", "GRASIM.NS", "ONGC.NS", "AMBUJACEM.NS"]
+def load_sectors(filename="sectors.json"):
+    if not os.path.exists(filename):
+        print(f"Error: {filename} missing!")
+        return {}
+    with open(filename, 'r') as f:
+        return json.load(f)
 
-}
+sectors = load_sectors()
+
+if not sectors:
+    exit()
 
 def send_telegram(message):
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
@@ -67,7 +51,7 @@ def get_val(df, col, idx=-1):
 # ==========================================
 # STEP A: TRUE SECTOR SCORING (TradingView)
 # ==========================================
-print("Fetching official NSE Sector data from TradingView...")
+print(f"Fetching official NSE Sector data for {len(sectors)} sectors from TradingView...")
 tv = TvDatafeed()
 sector_scores = {}
 
@@ -93,13 +77,13 @@ if not sector_scores:
     exit()
 
 best_sec = max(sector_scores, key=sector_scores.get)
-best_sec_friendly = best_sec.replace('CNX', '')
-print(f"Top Sector: {best_sec_friendly}")
+best_sec_friendly = best_sec.replace('CNX', '').replace('BANKNIFTY', 'BANK')
+print(f"Top Sector: {best_sec_friendly} (Score: {sector_scores[best_sec]:.2f})")
 
 # ==========================================
 # STEP B: SCAN THE APEX SECTOR (Yahoo Finance)
 # ==========================================
-print("Scanning constituent stocks via Yahoo Finance...")
+print(f"Scanning {len(sectors[best_sec])} constituent stocks via Yahoo Finance...")
 triggered = []
 
 for stock in sectors[best_sec]:
@@ -118,7 +102,7 @@ for stock in sectors[best_sec]:
         
         c, l, o, v, atr = get_val(df, 'Close'), get_val(df, 'Low'), get_val(df, 'Open'), get_val(df, 'Volume'), get_val(df, 'ATR')
 
-        if (get_val(df, 'Turnover') > 5000000 and c > get_val(df, 'SMA_50') > get_val(df, 'SMA_200') and 
+        if (get_val(df, 'Turnover') > 100000000 and c > get_val(df, 'SMA_50') > get_val(df, 'SMA_200') and 
             get_val(df, 'RSI') > 60 and l <= get_val(df, 'EMA_21') and c > o and v < get_val(df, 'Vol_SMA')):
             
             stop_loss = l - (atr * 0.5)

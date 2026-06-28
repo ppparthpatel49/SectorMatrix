@@ -49,13 +49,12 @@ def check_fundamentals(ticker):
         eg = info.get('earningsQuarterlyGrowth', 0)
         if roe is None: roe = 0
         if eg is None: eg = 0
-        # Passes if ROE > 15% or Earnings Growth > 10%
         return (roe > 0.15) or (eg > 0.10)
     except:
-        return True # Fallback to True if Yahoo API fails so we don't miss trades
+        return True 
 
 # ==========================================
-# UPGRADE 1: MACRO KILL SWITCH (Market Regime)
+# UPGRADE 1: MACRO ENVIRONMENT CHECK
 # ==========================================
 print("Checking Macro Environment (Nifty & VIX)...")
 tv = TvDatafeed()
@@ -73,10 +72,10 @@ try:
     
     if nifty_close < nifty_100_sma:
         kill_switch_active = True
-        macro_status = f"🚨 *SYSTEM HALTED:* Nifty 50 is below its 100-DMA. We are in a Correction."
+        macro_status = f"🚨 *MACRO WARNING:* Nifty is below 100-DMA (Correction)."
     elif vix_close > 22:
         kill_switch_active = True
-        macro_status = f"🚨 *SYSTEM HALTED:* India VIX is incredibly high ({vix_close:.1f}). Panic selling detected."
+        macro_status = f"🚨 *MACRO WARNING:* India VIX is extremely high ({vix_close:.1f})."
     else:
         macro_status = f"🟢 *Macro Check:* Nifty is Trending & VIX is healthy ({vix_close:.1f})."
 except Exception as e:
@@ -103,7 +102,6 @@ if not sector_scores:
     send_telegram("⚠️ Matrix Engine Error: Could not fetch Sector data.")
     exit()
 
-# Rank sectors
 sorted_sectors = sorted(sector_scores.keys(), key=lambda x: sector_scores[x], reverse=True)
 best_sec = sorted_sectors[0]
 top_3_sectors = sorted_sectors[:3]
@@ -127,52 +125,48 @@ for p_stock in portfolio:
 strong_stocks = []
 pullback_triggers = []
 
-if not kill_switch_active:
-    print(f"Scanning stocks in {best_sec_friendly}...")
-    for stock in sectors[best_sec]:
-        try:
-            df = yf.download(stock, period="1y", progress=False)
-            if len(df) < 200: continue
-            if isinstance(df.columns, pd.MultiIndex): df.columns = [c[0] for c in df.columns]
-            
-            df['SMA_50'] = df['Close'].rolling(50).mean()
-            df['SMA_200'] = df['Close'].rolling(200).mean()
-            df['EMA_21'] = df['Close'].ewm(span=21, adjust=False).mean()
-            df['Vol_SMA'] = df['Volume'].rolling(20).mean()
-            delta = df['Close'].diff()
-            gain = (delta.where(delta > 0, 0)).rolling(14).mean()
-            loss = (-delta.where(delta < 0, 0)).rolling(14).mean()
-            df['RSI'] = 100 - (100 / (1 + (gain / loss)))
-            
-            c, l, o, v = get_val(df, 'Close'), get_val(df, 'Low'), get_val(df, 'Open'), get_val(df, 'Volume')
-            
-            # Technical Health
-            is_liquid = (c * v) > 100000000
-            is_uptrend = c > get_val(df, 'SMA_50') and get_val(df, 'SMA_50') > get_val(df, 'SMA_200')
-            
-            if is_liquid and is_uptrend and get_val(df, 'RSI') > 60:
-                # UPGRADE 2: FUNDAMENTAL CANSLIM FILTER
-                if check_fundamentals(stock):
-                    strong_stocks.append({"ticker": stock.replace('.NS', ''), "price": c, "rsi": get_val(df, 'RSI')})
+print(f"Scanning stocks in {best_sec_friendly}...")
+for stock in sectors[best_sec]:
+    try:
+        df = yf.download(stock, period="1y", progress=False)
+        if len(df) < 200: continue
+        if isinstance(df.columns, pd.MultiIndex): df.columns = [c[0] for c in df.columns]
+        
+        df['SMA_50'] = df['Close'].rolling(50).mean()
+        df['SMA_200'] = df['Close'].rolling(200).mean()
+        df['EMA_21'] = df['Close'].ewm(span=21, adjust=False).mean()
+        df['Vol_SMA'] = df['Volume'].rolling(20).mean()
+        delta = df['Close'].diff()
+        gain = (delta.where(delta > 0, 0)).rolling(14).mean()
+        loss = (-delta.where(delta < 0, 0)).rolling(14).mean()
+        df['RSI'] = 100 - (100 / (1 + (gain / loss)))
+        
+        c, l, o, v = get_val(df, 'Close'), get_val(df, 'Low'), get_val(df, 'Open'), get_val(df, 'Volume')
+        
+        is_liquid = (c * v) > 100000000
+        is_uptrend = c > get_val(df, 'SMA_50') and get_val(df, 'SMA_50') > get_val(df, 'SMA_200')
+        
+        if is_liquid and is_uptrend and get_val(df, 'RSI') > 60:
+            if check_fundamentals(stock):
+                strong_stocks.append({"ticker": stock.replace('.NS', ''), "price": c, "rsi": get_val(df, 'RSI')})
+                
+                if l <= get_val(df, 'EMA_21') and c > o and v < get_val(df, 'Vol_SMA'):
+                    ranges = pd.concat([df['High']-df['Low'], np.abs(df['High']-df['Close'].shift()), np.abs(df['Low']-df['Close'].shift())], axis=1)
+                    atr = ranges.max(axis=1).rolling(14).mean().iloc[-1]
                     
-                    # Exact Trigger Check
-                    if l <= get_val(df, 'EMA_21') and c > o and v < get_val(df, 'Vol_SMA'):
-                        ranges = pd.concat([df['High']-df['Low'], np.abs(df['High']-df['Close'].shift()), np.abs(df['Low']-df['Close'].shift())], axis=1)
-                        atr = ranges.max(axis=1).rolling(14).mean().iloc[-1]
-                        
-                        stop_loss = l - (atr * 0.5)
-                        shares = int((ACCOUNT_SIZE * RISK_PER_TRADE) / (c - stop_loss)) if (c - stop_loss) > 0 else 0
-                        pullback_triggers.append({"ticker": stock.replace('.NS', ''), "entry": c, "stop": stop_loss, "shares": shares})
-        except: continue
-        time.sleep(0.1)
+                    stop_loss = l - (atr * 0.5)
+                    shares = int((ACCOUNT_SIZE * RISK_PER_TRADE) / (c - stop_loss)) if (c - stop_loss) > 0 else 0
+                    pullback_triggers.append({"ticker": stock.replace('.NS', ''), "entry": c, "stop": stop_loss, "shares": shares})
+    except: continue
+    time.sleep(0.1)
 
-    strong_stocks = sorted(strong_stocks, key=lambda k: k['rsi'], reverse=True)
+strong_stocks = sorted(strong_stocks, key=lambda k: k['rsi'], reverse=True)
 
 # ==========================================
 # UPGRADE 3: AUTOMATED CSV JOURNALING
 # ==========================================
 date_today = datetime.datetime.now().strftime("%Y-%m-%d")
-if pullback_triggers:
+if pullback_triggers and not kill_switch_active:
     file_exists = os.path.isfile('trade_journal.csv')
     with open('trade_journal.csv', 'a') as f:
         if not file_exists:
@@ -191,21 +185,25 @@ if rotation_warnings:
     for w in rotation_warnings: msg += f"{w}\n"
     msg += f"\n〰️〰️〰️〰️〰️〰️〰️〰️〰️〰️\n\n"
 
-if not kill_switch_active:
-    msg += f"🏆 *#1 Sector:* {best_sec_friendly}\n\n"
-    
-    if pullback_triggers:
-        msg += f"🎯 *FUNDAMENTAL 21-EMA PULLBACKS (BUY)*\n"
-        for t in pullback_triggers:
-            msg += f"🚀 *{t['ticker']}*\n🔹 Entry: ₹{t['entry']:.2f} | 🔴 Stop: ₹{t['stop']:.2f} | 📦 Qty: {t['shares']}\n\n"
-    else:
-        msg += f"🎯 *FUNDAMENTAL 21-EMA PULLBACKS:*\n⚠️ None triggered today. Wait for a dip.\n\n"
+msg += f"🏆 *#1 Sector:* {best_sec_friendly}\n\n"
 
-    if strong_stocks:
-        msg += f"💪 *STRONG FUNDAMENTAL RADAR (RSI>60)*\n"
-        for s in strong_stocks[:5]:
-            if not any(t['ticker'] == s['ticker'] for t in pullback_triggers):
-                msg += f"• {s['ticker']} (RSI: {s['rsi']:.0f})\n"
+if pullback_triggers:
+    if kill_switch_active:
+        msg += f"🎯 *FUNDAMENTAL 21-EMA PULLBACKS (PAPER TRADE / HIGH RISK)*\n"
+        msg += f"_Macro environment is red. Deploying capital is dangerous._\n"
+    else:
+        msg += f"🎯 *FUNDAMENTAL 21-EMA PULLBACKS (BUY)*\n"
+        
+    for t in pullback_triggers:
+        msg += f"🚀 *{t['ticker']}*\n🔹 Entry: ₹{t['entry']:.2f} | 🔴 Stop: ₹{t['stop']:.2f} | 📦 Qty: {t['shares']}\n\n"
+else:
+    msg += f"🎯 *FUNDAMENTAL 21-EMA PULLBACKS:*\n⚠️ None triggered today. Wait for a dip.\n\n"
+
+if strong_stocks:
+    msg += f"💪 *STRONG FUNDAMENTAL RADAR (RSI>60)*\n"
+    for s in strong_stocks[:5]:
+        if not any(t['ticker'] == s['ticker'] for t in pullback_triggers):
+            msg += f"• {s['ticker']} (RSI: {s['rsi']:.0f})\n"
 
 send_telegram(msg)
 print("Finished! Matrix execution complete.")

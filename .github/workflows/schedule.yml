@@ -2,7 +2,7 @@ name: Sector Matrix Trading Bot
 
 on:
   schedule:
-    - cron: '45 9 * * 1-5'
+    - cron: '45 8 * * 1-5'
   workflow_dispatch:
 
 jobs:
